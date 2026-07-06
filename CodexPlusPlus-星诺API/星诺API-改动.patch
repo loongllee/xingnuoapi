@@ -1,0 +1,160 @@
+diff --git a/apps/codex-plus-manager/src/App.tsx b/apps/codex-plus-manager/src/App.tsx
+index 11a2c70..ade320d 100644
+--- a/apps/codex-plus-manager/src/App.tsx
++++ b/apps/codex-plus-manager/src/App.tsx
+@@ -260,6 +260,8 @@ type RelayMode = "official" | "mixedApi" | "pureApi" | "aggregate";
+ const PROTOCOL_PROXY_BASE_URL = "http://127.0.0.1:57321/v1";
+ const CHAT_UPSTREAM_BASE_URL_KEY = "codex_plus_chat_base_url";
+ const SCRIPT_MARKET_REPOSITORY_URL = "https://github.com/BigPizzaV3/CodexPlusPlusScriptMarket";
++// 星诺API：供应商配置的 Base URL 已锁定，用户不可修改。
++const LOCKED_BASE_URL = "https://xingnuoapi.com/v1";
+ 
+ const emptyContextSelection = (): RelayContextSelection => ({
+   mcpServers: [],
+@@ -695,7 +697,7 @@ const defaultSettings: BackendSettings = {
+   codexAppImageOverlayFitMode: "fit",
+   codexGoalsEnabled: false,
+   launchMode: "patch",
+-  relayBaseUrl: "",
++  relayBaseUrl: LOCKED_BASE_URL,
+   relayApiKey: "",
+   relayProfiles: [
+     {
+@@ -2305,7 +2307,7 @@ function OverviewScreen({
+               </div>
+               <div>
+                 <span className="eyebrow">{t("官方中转站")}</span>
+-                <h2>JOJO Code</h2>
++                <h2>星诺API</h2>
+                 <p>
+                   {t("Codex++ 官方中转站，主打稳定接入和划算价格，支持 GPT-5.5、GPT-5.4、Claude Opus 4.8、Claude Opus 4.7、gpt-image-2 等模型与图像能力。")}
+                 </p>
+@@ -2319,9 +2321,9 @@ function OverviewScreen({
+                 <span>Opus 4.7</span>
+                 <span>gpt-image-2</span>
+               </div>
+-              <Button onClick={() => void actions.openExternalUrl("https://jojocode.com/")}>
++              <Button onClick={() => void actions.openExternalUrl("https://xingnuoapi.com/")}>
+                 <ExternalLink className="h-4 w-4" />
+-                {t("打开 JOJO Code")}
++                {t("打开 星诺API")}
+               </Button>
+             </div>
+           </div>
+@@ -3337,14 +3339,14 @@ function AboutScreen({
+           <div className="metric-list">
+             <Metric label={t("Codex++ 版本")} value={overview?.current_version ?? update?.currentVersion ?? "-"} />
+             <Metric label={t("Codex 版本")} value={overview?.codex_version ?? t("未检测到")} />
+-            <Metric label={t("项目地址")} value="github.com/BigPizzaV3/CodexPlusPlus" />
++            <Metric label={t("项目地址")} value="github.com/loongllee/xingnuoapi" />
+           </div>
+           <Toolbar>
+-            <Button onClick={() => void actions.openExternalUrl("https://github.com/BigPizzaV3/CodexPlusPlus")} variant="secondary">
++            <Button onClick={() => void actions.openExternalUrl("https://github.com/loongllee/xingnuoapi")} variant="secondary">
+               <ExternalLink className="h-4 w-4" />
+               {t("打开项目主页")}
+             </Button>
+-            <Button onClick={() => void actions.openExternalUrl("https://github.com/BigPizzaV3/CodexPlusPlus/issues")} variant="secondary">
++            <Button onClick={() => void actions.openExternalUrl("https://github.com/loongllee/xingnuoapi/issues")} variant="secondary">
+               <ExternalLink className="h-4 w-4" />
+               {t("反馈问题")}
+             </Button>
+@@ -4019,7 +4021,9 @@ function RelayProfileEditor({
+ 
+   const showApiFields = profile.relayMode !== "official" || profile.officialMixApiKey;
+   const updateDraft = (patch: Partial<RelayProfile>) => {
+-    onProfileChange(applyRelayProfilePatchToFiles(profile, patch, { allowGenerateFiles: isNew }));
++    // 星诺API：强制锁定 Base URL，任何改动都不会覆盖它。
++    const lockedPatch = { ...patch, baseUrl: LOCKED_BASE_URL };
++    onProfileChange(applyRelayProfilePatchToFiles(profile, lockedPatch, { allowGenerateFiles: isNew }));
+   };
+   const updateModelWindowRow = (index: number, patch: Partial<ModelWindowRow>) => {
+     setModelWindowRows(
+@@ -4172,9 +4176,10 @@ function RelayProfileEditor({
+           <div className="relay-api-fields">
+             <Field className="relay-field-base-url" label="Base URL">
+               <Input
+-                value={profile.baseUrl}
+-                onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value })}
+-                placeholder={t("填写中转服务 Base URL")}
++                value={LOCKED_BASE_URL}
++                readOnly
++                disabled
++                title={t("已锁定为星诺API，不可修改")}
+               />
+             </Field>
+             <Field className="relay-field-key" label="Key">
+diff --git a/apps/codex-plus-manager/src/i18n-en.ts b/apps/codex-plus-manager/src/i18n-en.ts
+index afcb02d..92e9065 100644
+--- a/apps/codex-plus-manager/src/i18n-en.ts
++++ b/apps/codex-plus-manager/src/i18n-en.ts
+@@ -339,7 +339,7 @@ export const EN_PLAIN: Record<string, string> = {
+   "手动": "Manual",
+   "手动启动": "Manual launch",
+   "打开": "Open",
+-  "打开 JOJO Code": "Open JOJO Code",
++  "打开 星诺API": "Open Xingnuo API",
+   "打开关于": "Open About",
+   "打开链接": "Open link",
+   "打开项目主页": "Open project homepage",
+diff --git a/apps/codex-plus-manager/src/presets.ts b/apps/codex-plus-manager/src/presets.ts
+index 07b40e0..ed78242 100644
+--- a/apps/codex-plus-manager/src/presets.ts
++++ b/apps/codex-plus-manager/src/presets.ts
+@@ -163,22 +163,12 @@ export const PRESETS: ProviderPreset[] = [
+ 
+   // ── 聚合/中转 ──
+   {
+-    id: "jojocode",
+-    name: "JOJO Code",
+-    websiteUrl: "https://jojocode.com/",
+-    apiKeyUrl: "https://jojocode.com/",
++    id: "xingnuoapi",
++    name: "星诺API",
++    websiteUrl: "https://xingnuoapi.com/",
++    apiKeyUrl: "https://xingnuoapi.com/",
+     category: "aggregator",
+-    baseUrl: "https://jojocode.com/v1",
+-    protocol: "responses",
+-    model: "gpt-5.5",
+-  },
+-  {
+-    id: "jojocode-max",
+-    name: "JOJO Code 包月",
+-    websiteUrl: "https://max.jojocode.com/",
+-    apiKeyUrl: "https://max.jojocode.com/",
+-    category: "aggregator",
+-    baseUrl: "https://max.jojocode.com/v1",
++    baseUrl: "https://xingnuoapi.com/v1",
+     protocol: "responses",
+     model: "gpt-5.5",
+   },
+diff --git a/crates/codex-plus-core/src/update.rs b/crates/codex-plus-core/src/update.rs
+index 2f9fb00..7ed2d18 100644
+--- a/crates/codex-plus-core/src/update.rs
++++ b/crates/codex-plus-core/src/update.rs
+@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
+ use serde::{Deserialize, Serialize};
+ use serde_json::Value;
+ 
+-pub const DEFAULT_REPOSITORY: &str = "BigPizzaV3/CodexPlusPlus";
++pub const DEFAULT_REPOSITORY: &str = "loongllee/xingnuoapi";
+ pub const DEFAULT_LATEST_JSON_URL: &str =
+-    "https://github.com/BigPizzaV3/CodexPlusPlus/releases/latest/download/latest.json";
++    "https://github.com/loongllee/xingnuoapi/releases/latest/download/latest.json";
+ 
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+ pub struct ReleaseAsset {
+diff --git a/tools/i18n-keys.json b/tools/i18n-keys.json
+index 47899d7..e466287 100644
+--- a/tools/i18n-keys.json
++++ b/tools/i18n-keys.json
+@@ -279,7 +279,7 @@
+     "手动",
+     "手动启动",
+     "打开",
+-    "打开 JOJO Code",
++    "打开 星诺API",
+     "打开关于",
+     "打开链接",
+     "打开项目主页",

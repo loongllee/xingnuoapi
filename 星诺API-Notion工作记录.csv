@@ -1,0 +1,13 @@
+任务名称,状态,分类,优先级,完成日期,涉及文件,详细说明
+品牌替换：JOJO Code → 星诺API,已完成,品牌改造,高,2026-07-05,"App.tsx (OverviewScreen ~L2296-2325), i18n-en.ts, i18n-keys.json","预览/概览页的标题、按钮文字、跳转链接全部从 JOJO Code / jojocode.com 替换为 星诺API / xingnuoapi.com"
+供应商预设替换,已完成,品牌改造,高,2026-07-05,"presets.ts","删除 jojocode + jojocode-max 两个预设，替换为单个 xingnuoapi 预设（name: 星诺API, baseUrl: https://xingnuoapi.com/v1, protocol: responses, model: gpt-5.5）"
+Base URL 锁死为星诺API,已完成,核心功能,高,2026-07-05,"App.tsx (RelayProfileEditor ~L4000, ~L4155)","供应商配置界面 Base URL 彻底锁死为 https://xingnuoapi.com/v1。三重保障：输入框 readOnly+disabled、updateDraft 强制回写 LOCKED_BASE_URL、新建配置默认值也锁定。选择其它预设也会被强制锁回。"
+自动更新源指向用户仓库,已完成,更新机制,高,2026-07-05,"crates/codex-plus-core/src/update.rs (L6-8)","DEFAULT_REPOSITORY → loongllee/xingnuoapi，DEFAULT_LATEST_JSON_URL → 用户仓库的 releases/latest/download/latest.json"
+关于页链接改为用户仓库,已完成,品牌改造,中,2026-07-05,"App.tsx (~L3342-3349)","项目主页、仓库按钮、Issues 按钮三处链接从 BigPizzaV3/CodexPlusPlus 改为 loongllee/xingnuoapi"
+编写幂等 codemod 脚本,已完成,工具脚本,高,2026-07-05,"apply-xingnuo.mjs (156行)","15 条变换规则覆盖 6 个区域，每条规则有 done 标记（幂等检测）+ find/replace。MY_REPO 写死为 loongllee/xingnuoapi。已在 v1.2.31 和 v1.2.32 两版测试通过。用法：git pull 上游 → node apply-xingnuo.mjs → 重新打包"
+编写 macOS 打包脚本,已完成,构建部署,中,2026-07-05,"build-dmg-mac.sh (75行)","自动检测架构（arm64/x64），依次执行 npm install → tsc check → vite build → cargo build → package-dmg.sh。仅能在 macOS 上运行。"
+编写 Windows 打包脚本,已完成,构建部署,中,2026-07-05,"build-exe-win.ps1 (81行)","PowerShell 脚本，依次执行 npm install → tsc check → vite build → cargo build → NSIS makensis。仅能在 Windows 上运行。"
+编写改造与打包说明文档,已完成,文档,中,2026-07-05,"星诺API-改造与打包说明.md (253行)","完整文档：所有改动清单、Mac/Win 构建步骤、上游同步工作流、更新源配置、latest.json 格式说明"
+编写模型协议选择指南,已完成,文档,中,2026-07-05,"星诺API-模型协议选择指南.md (76行)","核心规则：OpenAI 系模型（GPT/o系列/*-codex）→ Responses API；非 OpenAI 模型（Claude/DeepSeek/GLM/Qwen/Kimi 等）→ Chat Completions。含速查表、配置步骤、常见报错排查。"
+验证：脚本市场仓库不受影响,已完成,质量保证,高,2026-07-05,"apply-xingnuo.mjs","确认所有替换使用精确字符串匹配，BigPizzaV3/CodexPlusPlusScriptMarket（脚本市场，独立仓库）完全不受影响"
+验证：TypeScript 编译通过,已完成,质量保证,高,2026-07-05,"全部 .ts/.tsx 文件","改造后 tsc 编译 EXIT=0，无类型错误"
