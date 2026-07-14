@@ -620,7 +620,10 @@ pub fn confirm_pending_provider_import() -> CommandResult<SettingsPayload> {
             let message = if result.imported {
                 format!("已导入并应用供应商配置：{}。", result.profile_name)
             } else {
-                format!("供应商配置已存在，已重新选中并应用：{}。", result.profile_name)
+                format!(
+                    "供应商配置已存在，已重新选中并应用：{}。",
+                    result.profile_name
+                )
             };
             settings_payload(&message, "供应商导入后重新读取设置失败")
         }
