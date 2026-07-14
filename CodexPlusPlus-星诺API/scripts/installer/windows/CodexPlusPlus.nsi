@@ -48,6 +48,10 @@ Section "Install"
 
   WriteUninstaller "$INSTDIR\uninstall.exe"
   WriteRegStr HKCU "Software\Codex++" "InstallDir" "$INSTDIR"
+  WriteRegStr HKCU "Software\Classes\codexplusplus" "" "URL:Codex++ Import Protocol"
+  WriteRegStr HKCU "Software\Classes\codexplusplus" "URL Protocol" ""
+  WriteRegStr HKCU "Software\Classes\codexplusplus\DefaultIcon" "" "$INSTDIR\codex-plus-plus-manager.exe,0"
+  WriteRegStr HKCU "Software\Classes\codexplusplus\shell\open\command" "" '"$INSTDIR\codex-plus-plus-manager.exe" "%1"'
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++" "DisplayName" "Codex++"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++" "Publisher" "BigPizzaV3"
@@ -77,5 +81,6 @@ Section "Uninstall"
   RMDir "$INSTDIR"
 
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++"
+  DeleteRegKey HKCU "Software\Classes\codexplusplus"
   DeleteRegKey HKCU "Software\Codex++"
 SectionEnd

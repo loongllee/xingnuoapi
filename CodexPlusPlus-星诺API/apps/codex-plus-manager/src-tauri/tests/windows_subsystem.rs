@@ -62,11 +62,16 @@ fn manager_close_minimizes_to_tray_without_confirmation() {
 fn manager_queues_codexplusplus_provider_urls_for_confirmation_on_startup() {
     let main_rs = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
         .expect("read manager main.rs");
+    let lib_rs = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+        .expect("read manager lib.rs");
 
     assert!(main_rs.contains("codexplusplus://"));
-    assert!(main_rs.contains("provider_import::save_pending_provider_import_from_url"));
+    assert!(main_rs.contains("queue_provider_import_url"));
     assert!(!main_rs.contains("provider_import::import_provider_from_url"));
-    assert!(main_rs.contains("manager.provider_import_url.pending"));
+    assert!(lib_rs.contains("provider_import::save_pending_provider_import_from_url"));
+    assert!(lib_rs.contains("manager.provider_import_url.pending"));
+    assert!(lib_rs.contains("tauri::RunEvent::Opened"));
+    assert!(lib_rs.contains("show_main_window(app_handle)"));
 }
 
 #[test]
@@ -159,8 +164,10 @@ fn macos_packager_hides_silent_launcher_but_not_manager() {
         "create_app \"Codex++\" \"CodexPlusPlus\" \"$BINARY_DIR/codex-plus-plus\" \"com.bigpizzav3.codexplusplus\" \"true\""
     ));
     assert!(script.contains(
-        "create_app \"Codex++ 管理工具\" \"CodexPlusPlusManager\" \"$BINARY_DIR/codex-plus-plus-manager\" \"com.bigpizzav3.codexplusplus.manager\" \"false\""
+        "create_app \"Codex++ 管理工具\" \"CodexPlusPlusManager\" \"$BINARY_DIR/codex-plus-plus-manager\" \"com.bigpizzav3.codexplusplus.manager\" \"false\" \"codexplusplus\""
     ));
+    assert!(script.contains("<key>CFBundleURLTypes</key>"));
+    assert!(script.contains("<string>$url_scheme</string>"));
 }
 
 #[test]

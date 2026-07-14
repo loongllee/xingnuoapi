@@ -13,6 +13,33 @@ static APP_EXITING: AtomicBool = AtomicBool::new(false);
 const TRAY_MENU_SHOW: &str = "tray_show_main";
 const TRAY_MENU_QUIT: &str = "tray_quit_app";
 
+pub fn queue_provider_import_url(url: &str) -> bool {
+    if !url.starts_with("codexplusplus://") {
+        return false;
+    }
+    match codex_plus_core::provider_import::save_pending_provider_import_from_url(url) {
+        Ok(request) => {
+            let _ = codex_plus_core::diagnostic_log::append_diagnostic_log(
+                "manager.provider_import_url.pending",
+                serde_json::json!({
+                    "name": request.name,
+                    "baseUrl": request.base_url
+                }),
+            );
+            true
+        }
+        Err(error) => {
+            let _ = codex_plus_core::diagnostic_log::append_diagnostic_log(
+                "manager.provider_import_url.failed",
+                serde_json::json!({
+                    "error": error.to_string()
+                }),
+            );
+            false
+        }
+    }
+}
+
 pub fn run() {
     install_panic_logger();
     let _ = codex_plus_core::diagnostic_log::append_diagnostic_log(
@@ -115,7 +142,15 @@ pub fn run() {
             manager_hide_to_tray,
             update_tray_labels
         ])
-        .run(tauri::generate_context!());
+        .build(tauri::generate_context!())
+        .map(|app| {
+            app.run(|app_handle, event| {
+                #[cfg(target_os = "macos")]
+                handle_macos_run_event(app_handle, event);
+                #[cfg(not(target_os = "macos"))]
+                let _ = (app_handle, event);
+            });
+        });
     if let Err(error) = run_result {
         let _ = codex_plus_core::diagnostic_log::append_diagnostic_log(
             "manager.run_failed",
@@ -123,6 +158,24 @@ pub fn run() {
                 "error": error.to_string()
             }),
         );
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn handle_macos_run_event<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+    event: tauri::RunEvent,
+) {
+    if let tauri::RunEvent::Opened { urls } = event {
+        let mut queued = false;
+        for url in urls {
+            if queue_provider_import_url(url.as_str()) {
+                queued = true;
+            }
+        }
+        if queued {
+            show_main_window(app_handle);
+        }
     }
 }
 

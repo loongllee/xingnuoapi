@@ -1,0 +1,226 @@
+name: Codex++ auto deeplink artifacts
+
+on:
+  push:
+    branches:
+      - "codex/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CODEX_DIR: CodexPlusPlus-星诺API
+  CODEX_VERSION: 1.2.32
+
+jobs:
+  windows:
+    name: Windows installer and protocol smoke test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install NSIS
+        run: choco install nsis -y
+
+      - name: Install frontend dependencies
+        working-directory: ${{ env.CODEX_DIR }}/apps/codex-plus-manager
+        run: npm install --package-lock=false
+
+      - name: Check and build
+        shell: pwsh
+        run: |
+          Set-Location $env:CODEX_DIR
+          npm --prefix apps/codex-plus-manager run check
+          npm --prefix apps/codex-plus-manager run vite:build
+          cargo fmt --all -- --check
+          cargo test --workspace
+          cargo build --release
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          Set-Location $env:CODEX_DIR
+          New-Item -ItemType Directory -Force dist/windows/app | Out-Null
+          Copy-Item target/release/codex-plus-plus.exe dist/windows/app/
+          Copy-Item target/release/codex-plus-plus-manager.exe dist/windows/app/
+          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          Push-Location scripts/installer/windows
+          & $makensis "/INPUTCHARSET" "UTF8" "/DVERSION=$env:CODEX_VERSION" CodexPlusPlus.nsi
+          if ($LASTEXITCODE -ne 0) { throw "NSIS build failed: $LASTEXITCODE" }
+          Pop-Location
+
+      - name: Verify installer protocol registration and dispatch
+        shell: pwsh
+        run: |
+          Set-Location $env:CODEX_DIR
+          $installer = (Resolve-Path "dist/windows/CodexPlusPlus-$env:CODEX_VERSION-windows-x64-setup.exe").Path
+          $state = Join-Path $HOME '.codex-session-delete'
+          $log = Join-Path $state 'codex-plus.log'
+          if (Test-Path $state) { Remove-Item -LiteralPath $state -Recurse -Force }
+          $install = Start-Process -FilePath $installer -ArgumentList '/S' -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Installer failed: $($install.ExitCode)" }
+
+          $protocol = 'Registry::HKEY_CURRENT_USER\Software\Classes\codexplusplus'
+          if (-not (Test-Path $protocol)) { throw 'codexplusplus protocol key is missing' }
+          if ((Get-ItemPropertyValue -LiteralPath $protocol -Name 'URL Protocol') -ne '') {
+            throw 'URL Protocol value is invalid'
+          }
+          $command = (Get-Item -LiteralPath "$protocol\shell\open\command").GetValue('')
+          $expectedCommand = '"' + "$env:LOCALAPPDATA\Programs\Codex++\codex-plus-plus-manager.exe" + '" "%1"'
+          if ($command -ne $expectedCommand) {
+            throw "Protocol command is invalid: $command"
+          }
+
+          function Open-ImportUrl([string]$url) {
+            $info = [Diagnostics.ProcessStartInfo]::new()
+            $info.FileName = $url
+            $info.UseShellExecute = $true
+            [Diagnostics.Process]::Start($info) | Out-Null
+          }
+          function Wait-ForImportEvents([int]$minimum) {
+            $deadline = (Get-Date).AddSeconds(30)
+            do {
+              $count = if (Test-Path $log) {
+                @(Get-Content -LiteralPath $log | Select-String 'manager.provider_import_url.failed').Count
+              } else { 0 }
+              if ($count -ge $minimum) { return }
+              Start-Sleep -Milliseconds 500
+            } while ((Get-Date) -lt $deadline)
+            throw "Expected $minimum protocol dispatch events, found $count"
+          }
+
+          Open-ImportUrl 'codexplusplus://v1/import/provider'
+          Wait-ForImportEvents 1
+          Open-ImportUrl 'codexplusplus://v1/import/provider?retry=1'
+          Wait-ForImportEvents 2
+
+          Get-Process codex-plus-plus-manager -ErrorAction SilentlyContinue | Stop-Process -Force
+          $uninstaller = "$env:LOCALAPPDATA\Programs\Codex++\uninstall.exe"
+          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstaller failed: $($uninstall.ExitCode)" }
+          if (Test-Path $protocol) { throw 'codexplusplus protocol key was not removed' }
+
+      - name: Package Windows download
+        shell: pwsh
+        run: |
+          Set-Location $env:CODEX_DIR
+          $installer = "dist/windows/CodexPlusPlus-$env:CODEX_VERSION-windows-x64-setup.exe"
+          Compress-Archive -Path $installer -DestinationPath "dist/windows/CodexPlusPlus-$env:CODEX_VERSION-windows-x64-setup.zip" -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CodexPlusPlus-${{ env.CODEX_VERSION }}-windows-x64-setup
+          path: ${{ env.CODEX_DIR }}/dist/windows/CodexPlusPlus-${{ env.CODEX_VERSION }}-windows-x64-setup.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS ${{ matrix.arch }} bundle and protocol smoke test
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            download_name: CodexPlusPlus-1.2.32-macos-intel-x64.dmg.zip
+          - arch: arm64
+            runner: macos-14
+            target: aarch64-apple-darwin
+            download_name: CodexPlusPlus-1.2.32-macos-apple-silicon.dmg.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        working-directory: ${{ env.CODEX_DIR }}/apps/codex-plus-manager
+        run: npm install --package-lock=false
+
+      - name: Check and build
+        working-directory: ${{ env.CODEX_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix apps/codex-plus-manager run check
+          npm --prefix apps/codex-plus-manager run vite:build
+          cargo fmt --all -- --check
+          cargo test -p codex-plus-core --test installers
+          cargo test -p codex-plus-manager --test windows_subsystem
+          cargo build --release --target '${{ matrix.target }}'
+
+      - name: Build and verify DMG
+        working-directory: ${{ env.CODEX_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BINARY_DIR="$PWD/target/${{ matrix.target }}/release" bash scripts/installer/macos/package-dmg.sh "$CODEX_VERSION" '${{ matrix.arch }}'
+          manager='dist/macos/stage/Codex++ 管理工具.app'
+          silent='dist/macos/stage/Codex++.app'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$manager/Contents/Info.plist")" = 'codexplusplus'
+          if /usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes' "$silent/Contents/Info.plist" >/dev/null 2>&1; then
+            echo 'silent app must not register codexplusplus' >&2
+            exit 1
+          fi
+          plutil -lint "$manager/Contents/Info.plist"
+          codesign -dv "$manager" >/dev/null 2>&1
+
+      - name: Verify cold and running URL dispatch
+        working-directory: ${{ env.CODEX_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manager="$PWD/dist/macos/stage/Codex++ 管理工具.app"
+          state="$HOME/.codex-session-delete"
+          log="$state/codex-plus.log"
+          rm -rf "$state"
+          lsregister='/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
+          "$lsregister" -f "$manager"
+
+          wait_for_events() {
+            minimum="$1"
+            for _ in $(seq 1 60); do
+              count=0
+              if [ -f "$log" ]; then
+                count="$(grep -c 'manager.provider_import_url.failed' "$log" || true)"
+              fi
+              if [ "$count" -ge "$minimum" ]; then return 0; fi
+              sleep 0.5
+            done
+            echo "expected $minimum protocol dispatch events" >&2
+            test -f "$log" && cat "$log"
+            return 1
+          }
+
+          open 'codexplusplus://v1/import/provider'
+          wait_for_events 1
+          open 'codexplusplus://v1/import/provider?retry=1'
+          wait_for_events 2
+          pkill -f CodexPlusPlusManager || true
+
+      - name: Package macOS download
+        working-directory: ${{ env.CODEX_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist/macos
+          zip -j '${{ matrix.download_name }}' "CodexPlusPlus-$CODEX_VERSION-macos-${{ matrix.arch }}.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.download_name }}
+          path: ${{ env.CODEX_DIR }}/dist/macos/${{ matrix.download_name }}
+          if-no-files-found: error
