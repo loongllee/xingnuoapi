@@ -7,6 +7,10 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+if ($env:GITHUB_ACTIONS -ne "true") {
+  throw "This destructive state-isolation test may only run on an ephemeral GitHub Actions runner"
+}
+
 function Assert-True([bool]$Condition, [string]$Message) {
   if (-not $Condition) { throw $Message }
 }
