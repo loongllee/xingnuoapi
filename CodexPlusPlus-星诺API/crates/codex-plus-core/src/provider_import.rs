@@ -104,6 +104,33 @@ pub fn confirm_pending_provider_import_at(
     Ok(result)
 }
 
+pub fn confirm_pending_provider_import_at_and_apply(
+    path: &Path,
+    store: SettingsStore,
+    codex_home: &Path,
+) -> anyhow::Result<ProviderImportResult> {
+    let request = load_pending_provider_import_at(path)?.context("没有待确认的供应商导入")?;
+    let result = import_provider_with_store(request, store.clone())?;
+    let settings = store.load()?;
+    if !settings.relay_profiles_enabled {
+        anyhow::bail!("供应商配置总开关已关闭，导入已保存但尚未应用");
+    }
+    let profile = settings.active_relay_profile();
+    let common = crate::relay_config::normalize_config_text(&format!(
+        "{}\n\n{}\n",
+        settings.relay_common_config_contents.trim(),
+        settings.relay_context_config_contents.trim()
+    ));
+    crate::relay_config::apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard(
+        codex_home,
+        &profile,
+        &common,
+        settings.computer_use_guard_enabled,
+    )?;
+    clear_pending_provider_import_at(path)?;
+    Ok(result)
+}
+
 pub fn import_provider(request: ProviderImportRequest) -> anyhow::Result<ProviderImportResult> {
     import_provider_with_store(request, SettingsStore::default())
 }
@@ -120,10 +147,14 @@ pub fn import_provider_with_store(
         .iter()
         .find(|profile| provider_identity(&profile.name, &profile.upstream_base_url) == identity)
     {
+        let profile_id = existing.id.clone();
+        let profile_name = existing.name.clone();
+        settings.active_relay_id = profile_id.clone();
+        store.save(&settings)?;
         return Ok(ProviderImportResult {
             imported: false,
-            profile_id: existing.id.clone(),
-            profile_name: existing.name.clone(),
+            profile_id,
+            profile_name,
         });
     }
 
@@ -424,6 +455,92 @@ mod tests {
             settings.relay_profiles[1].upstream_base_url,
             "https://jojocode.com/v1"
         );
+    }
+
+    #[test]
+    fn duplicate_import_reselects_existing_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SettingsStore::new(dir.path().join("settings.json"));
+        let request = ProviderImportRequest {
+            name: "Imported".to_string(),
+            base_url: "https://example.invalid/v1".to_string(),
+            api_key: "sk-placeholder".to_string(),
+            wire_api: "responses".to_string(),
+            relay_mode: "pureApi".to_string(),
+            config_contents: String::new(),
+            auth_contents: String::new(),
+        };
+        let first = import_provider_with_store(request.clone(), store.clone()).unwrap();
+        let mut settings = store.load().unwrap();
+        settings.active_relay_id = "official".to_string();
+        store.save(&settings).unwrap();
+
+        let second = import_provider_with_store(request, store.clone()).unwrap();
+
+        assert!(!second.imported);
+        assert_eq!(second.profile_id, first.profile_id);
+        assert_eq!(store.load().unwrap().active_relay_id, first.profile_id);
+    }
+
+    #[test]
+    fn confirm_and_apply_writes_responses_provider_and_clears_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let pending = dir.path().join("pending.json");
+        let store = SettingsStore::new(dir.path().join("settings.json"));
+        let home = dir.path().join("codex-home");
+        save_pending_provider_import_at(
+            &pending,
+            &ProviderImportRequest {
+                name: "Imported 测试".to_string(),
+                base_url: "http://127.0.0.1:43123/v1".to_string(),
+                api_key: "sk-placeholder+%&".to_string(),
+                wire_api: "responses".to_string(),
+                relay_mode: "pureApi".to_string(),
+                config_contents: String::new(),
+                auth_contents: String::new(),
+            },
+        )
+        .unwrap();
+
+        confirm_pending_provider_import_at_and_apply(&pending, store, &home).unwrap();
+
+        let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        let auth = std::fs::read_to_string(home.join("auth.json")).unwrap();
+        assert!(config.contains("base_url = \"http://127.0.0.1:43123/v1\""));
+        assert!(config.contains("wire_api = \"responses\""));
+        assert!(!config.contains("experimental_bearer_token"));
+        assert!(auth.contains("sk-placeholder+%&"));
+        assert!(!pending.exists());
+    }
+
+    #[test]
+    fn confirm_and_apply_chat_uses_proxy_and_preserves_upstream() {
+        let dir = tempfile::tempdir().unwrap();
+        let pending = dir.path().join("pending.json");
+        let store = SettingsStore::new(dir.path().join("settings.json"));
+        let home = dir.path().join("codex-home");
+        save_pending_provider_import_at(
+            &pending,
+            &ProviderImportRequest {
+                name: "Chat Imported".to_string(),
+                base_url: "http://127.0.0.1:43124/v1".to_string(),
+                api_key: "sk-placeholder".to_string(),
+                wire_api: "chat".to_string(),
+                relay_mode: "pureApi".to_string(),
+                config_contents: String::new(),
+                auth_contents: String::new(),
+            },
+        )
+        .unwrap();
+
+        confirm_pending_provider_import_at_and_apply(&pending, store.clone(), &home).unwrap();
+
+        let settings = store.load().unwrap();
+        let profile = settings.active_relay_profile();
+        let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        assert_eq!(profile.upstream_base_url, "http://127.0.0.1:43124/v1");
+        assert!(config.contains("base_url = \"http://127.0.0.1:47891/v1\""));
+        assert!(config.contains("wire_api = \"responses\""));
     }
 
     #[test]

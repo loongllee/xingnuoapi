@@ -607,18 +607,25 @@ pub fn load_pending_provider_import() -> CommandResult<PendingProviderImportPayl
 
 #[tauri::command]
 pub fn confirm_pending_provider_import() -> CommandResult<SettingsPayload> {
-    match codex_plus_core::provider_import::confirm_pending_provider_import() {
-        Ok(Some(result)) => {
+    let pending_path = codex_plus_core::paths::default_pending_provider_import_path();
+    if !pending_path.exists() {
+        return settings_payload("没有待确认的供应商导入。", "设置读取失败");
+    }
+    match codex_plus_core::provider_import::confirm_pending_provider_import_at_and_apply(
+        &pending_path,
+        SettingsStore::default(),
+        &codex_plus_core::relay_config::default_codex_home_dir(),
+    ) {
+        Ok(result) => {
             let message = if result.imported {
-                format!("已导入供应商配置：{}。", result.profile_name)
+                format!("已导入并应用供应商配置：{}。", result.profile_name)
             } else {
-                format!("供应商配置已存在：{}。", result.profile_name)
+                format!("供应商配置已存在，已重新选中并应用：{}。", result.profile_name)
             };
             settings_payload(&message, "供应商导入后重新读取设置失败")
         }
-        Ok(None) => settings_payload("没有待确认的供应商导入。", "设置读取失败"),
         Err(error) => failed(
-            &format!("导入供应商配置失败：{error}"),
+            &format!("供应商导入或应用失败，确认内容已保留，可重试：{error}"),
             settings_payload_value().unwrap_or_else(|(_, payload)| payload),
         ),
     }
