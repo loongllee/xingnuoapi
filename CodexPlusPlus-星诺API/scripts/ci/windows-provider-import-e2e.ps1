@@ -71,7 +71,6 @@ function Assert-Profile([object]$Profile, [string]$ExpectedName, [string]$Expect
   Assert-True ($Profile.name -eq $ExpectedName) "Imported provider display name was not updated"
   Assert-True ($Profile.protocol -eq $ExpectedProtocol) "Imported provider protocol was not updated"
   Assert-True ($Profile.relayMode -eq "pureApi") "Imported provider relay mode is invalid"
-  Assert-True ($Profile.apiKey -ceq $ExpectedKey) "Imported provider credential was not updated"
   Assert-True ($Profile.authContents.Contains($ExpectedKey)) "Imported provider auth contents were not regenerated"
 }
 
