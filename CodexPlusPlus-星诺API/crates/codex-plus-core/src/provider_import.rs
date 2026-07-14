@@ -145,18 +145,14 @@ pub fn import_provider_with_store(
     let mut settings = store.load().unwrap_or_default();
     let stable_id = stable_profile_id(&request.import_id);
     let identity = provider_identity(&request.name, &request.base_url);
-    if let Some(index) = settings
-        .relay_profiles
-        .iter()
-        .position(|profile| {
-            stable_id
-                .as_ref()
-                .map(|id| profile.id == *id)
-                .unwrap_or_else(|| {
-                    provider_identity(&profile.name, &profile.upstream_base_url) == identity
-                })
-        })
-    {
+    if let Some(index) = settings.relay_profiles.iter().position(|profile| {
+        stable_id
+            .as_ref()
+            .map(|id| profile.id == *id)
+            .unwrap_or_else(|| {
+                provider_identity(&profile.name, &profile.upstream_base_url) == identity
+            })
+    }) {
         let profile_id = settings.relay_profiles[index].id.clone();
         let mut replacement = relay_profile_from_request(&request, &[]);
         replacement.id = profile_id.clone();
@@ -232,7 +228,10 @@ fn relay_profile_from_request(
 ) -> RelayProfile {
     RelayProfile {
         id: stable_profile_id(&request.import_id).unwrap_or_else(|| {
-            unique_profile_id(&format!("import-{}", sanitize_id(&request.name)), existing_ids)
+            unique_profile_id(
+                &format!("import-{}", sanitize_id(&request.name)),
+                existing_ids,
+            )
         }),
         name: request.name.clone(),
         model: String::new(),
@@ -525,7 +524,11 @@ mod tests {
         assert_eq!(replaced.protocol, RelayProtocol::Responses);
         assert_eq!(replaced.relay_mode, RelayMode::PureApi);
         assert!(replaced.auth_contents.contains("sk-replaced"));
-        assert!(replaced.config_contents.contains("wire_api = \"responses\""));
+        assert!(
+            replaced
+                .config_contents
+                .contains("wire_api = \"responses\"")
+        );
         assert!(!replaced.config_contents.contains("sk-old-chat"));
     }
 
@@ -620,7 +623,10 @@ mod tests {
         let second = import_provider_with_store(make("sk-two"), store.clone()).unwrap();
         assert!(!second.imported);
         assert_eq!(second.profile_id, first.profile_id);
-        assert_eq!(store.load().unwrap().active_relay_profile().api_key, "sk-two");
+        assert_eq!(
+            store.load().unwrap().active_relay_profile().api_key,
+            "sk-two"
+        );
     }
 
     #[test]
