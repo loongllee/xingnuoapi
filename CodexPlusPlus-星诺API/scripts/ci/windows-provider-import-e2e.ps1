@@ -154,9 +154,9 @@ try {
   $codexCommand = (Get-Command codex.cmd -ErrorAction Stop).Source
   $env:CODEX_HOME = $codexHome
   Remove-Item Env:OPENAI_API_KEY -ErrorAction SilentlyContinue
-  $beforeResponses = (Read-Captures $capturePath).Count
+  $beforeResponses = @(Read-Captures $capturePath).Count
   Invoke-Codex "responses-cold"
-  Wait-Until { (Read-Captures $capturePath).Count -gt $beforeResponses } "Responses request did not reach the mock"
+  Wait-Until { @(Read-Captures $capturePath).Count -gt $beforeResponses } "Responses request did not reach the mock"
   $responseRequest = @(Read-Captures $capturePath | Where-Object { $_.path -eq "/v1/responses" -and $_.responsesAuthMatch })[-1]
   Assert-True ($null -ne $responseRequest -and $responseRequest.hasInput) "Responses request path, credential, or payload is invalid"
 
@@ -175,9 +175,9 @@ try {
   $proxyPort = [int]$proxyMatch.Groups[1].Value
   $helperProcess = Start-Process -FilePath $LauncherPath -ArgumentList @("--helper-only", "--helper-port", "$proxyPort") -PassThru
   Wait-Until { Test-TcpPort $proxyPort } "Codex++ Chat protocol helper did not start"
-  $beforeChat = (Read-Captures $capturePath).Count
+  $beforeChat = @(Read-Captures $capturePath).Count
   Invoke-Codex "chat-running"
-  Wait-Until { (Read-Captures $capturePath).Count -gt $beforeChat } "Chat request did not reach the mock"
+  Wait-Until { @(Read-Captures $capturePath).Count -gt $beforeChat } "Chat request did not reach the mock"
   $chatRequest = @(Read-Captures $capturePath | Where-Object { $_.path -eq "/v1/chat/completions" -and $_.chatAuthMatch })[-1]
   Assert-True ($null -ne $chatRequest -and $chatRequest.hasMessages) "Chat proxy path, credential, or payload is invalid"
 
@@ -191,9 +191,9 @@ try {
   Assert-Profile $responsesAgain.Profile "CI Responses Again" "responses" $responsesKey
   $finalConfig = Get-Content -LiteralPath $configPath -Raw -Encoding utf8
   Assert-True ($finalConfig.Contains("base_url = `"$baseUrl`"")) "Chat to Responses update retained the local proxy"
-  $beforeFinal = (Read-Captures $capturePath).Count
+  $beforeFinal = @(Read-Captures $capturePath).Count
   Invoke-Codex "responses-running"
-  Wait-Until { (Read-Captures $capturePath).Count -gt $beforeFinal } "Updated Responses request did not reach the mock"
+  Wait-Until { @(Read-Captures $capturePath).Count -gt $beforeFinal } "Updated Responses request did not reach the mock"
   $finalRequest = @(Read-Captures $capturePath | Where-Object { $_.path -eq "/v1/responses" -and $_.responsesAuthMatch })[-1]
   Assert-True ($null -ne $finalRequest -and $finalRequest.hasInput) "Updated Responses request is invalid"
 
