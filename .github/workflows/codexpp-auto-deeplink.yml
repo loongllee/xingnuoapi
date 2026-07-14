@@ -63,6 +63,7 @@ jobs:
           $installer = (Resolve-Path "dist/windows/CodexPlusPlus-$env:CODEX_VERSION-windows-x64-setup.exe").Path
           $state = Join-Path $HOME '.codex-session-delete'
           $log = Join-Path $state 'codex-plus.log'
+          $pending = Join-Path $state 'pending-provider-import.json'
           if (Test-Path $state) { Remove-Item -LiteralPath $state -Recurse -Force }
           $install = Start-Process -FilePath $installer -ArgumentList '/S' -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Installer failed: $($install.ExitCode)" }
@@ -88,7 +89,7 @@ jobs:
             $deadline = (Get-Date).AddSeconds(30)
             do {
               $count = if (Test-Path $log) {
-                @(Get-Content -LiteralPath $log | Select-String 'manager.provider_import_url.failed').Count
+                @(Get-Content -LiteralPath $log | Select-String 'manager.provider_import_url.pending').Count
               } else { 0 }
               if ($count -ge $minimum) { return }
               Start-Sleep -Milliseconds 500
@@ -96,9 +97,14 @@ jobs:
             throw "Expected $minimum protocol dispatch events, found $count"
           }
 
-          Open-ImportUrl 'codexplusplus://v1/import/provider'
+          $smokeUrl = 'codexplusplus://v1/import/provider?name=CI%20Smoke&baseUrl=https%3A%2F%2Fexample.invalid%2Fv1&apiKey=sk-ci-smoke-not-real&wireApi=responses&relayMode=pureApi'
+          Open-ImportUrl $smokeUrl
           Wait-ForImportEvents 1
-          Open-ImportUrl 'codexplusplus://v1/import/provider?retry=1'
+          if (-not (Test-Path $pending)) { throw 'pending import file is missing' }
+          if (-not (Get-Content -Raw -LiteralPath $pending).Contains('https://example.invalid/v1')) {
+            throw 'pending import file does not contain the smoke provider'
+          }
+          Open-ImportUrl "$smokeUrl&retry=1"
           Wait-ForImportEvents 2
 
           Get-Process codex-plus-plus-manager -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -186,6 +192,7 @@ jobs:
           manager="$PWD/dist/macos/stage/Codex++ 管理工具.app"
           state="$HOME/.codex-session-delete"
           log="$state/codex-plus.log"
+          pending="$state/pending-provider-import.json"
           rm -rf "$state"
           lsregister='/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
           "$lsregister" -f "$manager"
@@ -195,7 +202,7 @@ jobs:
             for _ in $(seq 1 60); do
               count=0
               if [ -f "$log" ]; then
-                count="$(grep -c 'manager.provider_import_url.failed' "$log" || true)"
+                count="$(grep -c 'manager.provider_import_url.pending' "$log" || true)"
               fi
               if [ "$count" -ge "$minimum" ]; then return 0; fi
               sleep 0.5
@@ -205,9 +212,12 @@ jobs:
             return 1
           }
 
-          open 'codexplusplus://v1/import/provider'
+          smoke_url='codexplusplus://v1/import/provider?name=CI%20Smoke&baseUrl=https%3A%2F%2Fexample.invalid%2Fv1&apiKey=sk-ci-smoke-not-real&wireApi=responses&relayMode=pureApi'
+          open "$smoke_url"
           wait_for_events 1
-          open 'codexplusplus://v1/import/provider?retry=1'
+          test -f "$pending"
+          grep -q 'https://example.invalid/v1' "$pending"
+          open "$smoke_url&retry=1"
           wait_for_events 2
           pkill -f CodexPlusPlusManager || true
 
