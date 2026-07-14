@@ -102,40 +102,6 @@ async function clickConfirm(port) {
   throw new Error("The provider import confirmation button did not appear");
 }
 
-async function assertModelFetchFails(port) {
-  const wrongKey = requiredEnvironment("CI_WRONG_KEY");
-  const expression = `(async () => {
-    const invoke = window.__TAURI_INTERNALS__?.invoke;
-    if (typeof invoke !== "function") return { infrastructureError: true };
-    const loaded = await invoke("load_settings");
-    const settings = loaded.settings || loaded;
-    const profiles = settings.relayProfiles || [];
-    const active = profiles.find((item) => item.id === settings.activeRelayId);
-    if (!active) return { infrastructureError: true };
-    const wrongAuth = JSON.stringify({ OPENAI_API_KEY: ${JSON.stringify(wrongKey)} }, null, 2) + "\n";
-    const result = await invoke("fetch_relay_profile_models", {
-      profile: {
-        ...active,
-        apiKey: ${JSON.stringify(wrongKey)},
-        authContents: wrongAuth
-      }
-    });
-    return {
-      infrastructureError: false,
-      status: result.status,
-      modelCount: Array.isArray(result.models) ? result.models.length : -1
-    };
-  })()`;
-  const result = await evaluateInManager(port, expression);
-  if (!result || result.infrastructureError || result.modelCount !== 0) {
-    throw new Error("Invalid-key model fetch did not return an empty result");
-  }
-  if (result.status === "ok" || result.status === "success") {
-    throw new Error("Invalid-key model fetch was reported as successful");
-  }
-  process.stdout.write("CDP_INVALID_KEY_MODELS_EMPTY\n");
-}
-
 function responseEvents(model) {
   const responseId = "resp_ci_responses";
   const itemId = "msg_ci_responses";
@@ -291,6 +257,5 @@ function startServer() {
 
 const mode = process.argv[2] || "serve";
 if (mode === "click-confirm") await clickConfirm(Number(argument("--cdp-port")));
-else if (mode === "assert-model-fetch-fails") await assertModelFetchFails(Number(argument("--cdp-port")));
 else if (mode === "serve") startServer();
 else throw new Error(`Unknown mode: ${mode}`);

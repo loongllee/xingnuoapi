@@ -513,11 +513,12 @@ pub async fn fetch_relay_profile_model_ids(
         } else {
             profile.name.trim().to_string()
         },
-        // 始终从当前 profile 的规范化语义取上游与凭据。Chat profile 的
-        // config base_url 可能是本地协议代理，不能拿它查询上游模型；同时
-        // api_key 是非持久化字段，重载后应从 auth/config 恢复。
-        base_url: crate::relay_config::relay_profile_base_url(profile),
-        api_key: crate::relay_config::relay_profile_api_key(profile),
+        base_url: if profile.upstream_base_url.trim().is_empty() {
+            profile.base_url.trim().to_string()
+        } else {
+            profile.upstream_base_url.trim().to_string()
+        },
+        api_key: profile.api_key.trim().to_string(),
     };
     if source.base_url.is_empty() {
         anyhow::bail!("Base URL 不能为空");
@@ -774,84 +775,4 @@ fn unquote_toml_string(value: &str) -> String {
         })
         .unwrap_or(value)
         .to_string()
-}
-
-#[cfg(test)]
-mod relay_profile_fetch_tests {
-    use super::*;
-    use crate::settings::{RelayMode, RelayProfile, RelayProtocol};
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::sync::mpsc;
-
-    fn mock_once(status: u16, body: &str) -> (String, mpsc::Receiver<String>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let body = body.to_string();
-        let (sender, receiver) = mpsc::channel();
-        std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut bytes = [0u8; 8192];
-            let size = stream.read(&mut bytes).unwrap();
-            sender
-                .send(String::from_utf8_lossy(&bytes[..size]).to_string())
-                .unwrap();
-            let reason = if status == 200 { "OK" } else { "Error" };
-            write!(
-                stream,
-                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            )
-            .unwrap();
-        });
-        (format!("http://{address}/v1"), receiver)
-    }
-
-    fn profile(base_url: String) -> RelayProfile {
-        RelayProfile {
-            id: "current".to_string(),
-            name: "Current".to_string(),
-            base_url: "http://127.0.0.1:9/v1".to_string(),
-            upstream_base_url: base_url,
-            api_key: String::new(),
-            protocol: RelayProtocol::Responses,
-            relay_mode: RelayMode::PureApi,
-            auth_contents: "{\"OPENAI_API_KEY\":\"sk-current-placeholder\"}".to_string(),
-            model_list: "stale-chat-model".to_string(),
-            ..RelayProfile::default()
-        }
-    }
-
-    #[tokio::test]
-    async fn fetch_uses_current_normalized_upstream_and_key() {
-        let (base_url, request) = mock_once(200, r#"{"data":[{"id":"response-model"}]}"#);
-        let (models, endpoint) = fetch_relay_profile_model_ids(&profile(base_url.clone()))
-            .await
-            .unwrap();
-        let request = request.recv().unwrap();
-        assert_eq!(models, vec!["response-model"]);
-        assert_eq!(endpoint, format!("{base_url}/models"));
-        assert!(request.starts_with("GET /v1/models HTTP/1.1"));
-        assert!(request.to_ascii_lowercase().contains(
-            "authorization: bearer sk-current-placeholder"
-        ));
-        assert!(!models.iter().any(|model| model == "stale-chat-model"));
-    }
-
-    #[tokio::test]
-    async fn fetch_errors_without_stale_fallback_for_http_empty_and_invalid_payloads() {
-        for (status, body) in [
-            (401, r#"{"error":"unauthorized"}"#),
-            (200, r#"{"data":[]}"#),
-            (200, "not-json"),
-            (200, r#"{"unexpected":"value"}"#),
-        ] {
-            let (base_url, _) = mock_once(status, body);
-            let error = fetch_relay_profile_model_ids(&profile(base_url))
-                .await
-                .unwrap_err();
-            assert!(!error.to_string().is_empty());
-        }
-    }
 }

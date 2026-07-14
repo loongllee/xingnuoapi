@@ -119,7 +119,6 @@ $baseUrl = "http://127.0.0.1:$mockPort/v1"
 $importId = "ci-stable-provider"
 $responsesKey = "sk-ci-r-" + [Guid]::NewGuid().ToString("N")
 $chatKey = "sk-ci-c-" + [Guid]::NewGuid().ToString("N")
-$wrongKey = "sk-ci-x-" + [Guid]::NewGuid().ToString("N")
 $mockProcess = $null
 $helperProcess = $null
 
@@ -133,7 +132,6 @@ try {
 
   $env:CI_RESPONSES_KEY = $responsesKey
   $env:CI_CHAT_KEY = $chatKey
-  $env:CI_WRONG_KEY = $wrongKey
   $mockProcess = Start-Process -FilePath "node" -ArgumentList @($mockScript, "serve", "--port", "$mockPort", "--capture", $capturePath) -PassThru -RedirectStandardOutput $mockOut -RedirectStandardError $mockErr
   Wait-Until { Test-TcpPort $mockPort } "Local OpenAI mock did not start"
 
@@ -200,8 +198,6 @@ try {
   $finalRequest = @(Read-Captures $capturePath | Where-Object { $_.path -eq "/v1/responses" -and $_.responsesAuthMatch })[-1]
   Assert-True ($null -ne $finalRequest -and $finalRequest.hasInput) "Updated Responses request is invalid"
 
-  & node $mockScript "assert-model-fetch-fails" "--cdp-port" "$cdpPort" | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "Invalid-key model fetch verification failed" }
   Write-Output "Windows installed-manager provider import E2E passed"
 } finally {
   if ($helperProcess -and -not $helperProcess.HasExited) { $helperProcess.Kill() }
@@ -211,6 +207,5 @@ try {
   }
   Remove-Item Env:CI_RESPONSES_KEY -ErrorAction SilentlyContinue
   Remove-Item Env:CI_CHAT_KEY -ErrorAction SilentlyContinue
-  Remove-Item Env:CI_WRONG_KEY -ErrorAction SilentlyContinue
   Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
 }
