@@ -107,6 +107,12 @@ jobs:
           Open-ImportUrl "$smokeUrl&retry=1"
           Wait-ForImportEvents 2
 
+          & ./scripts/ci/windows-provider-import-e2e.ps1 `
+            -ManagerPath "$env:LOCALAPPDATA\Programs\Codex++\codex-plus-plus-manager.exe" `
+            -LauncherPath "$env:LOCALAPPDATA\Programs\Codex++\codex-plus-plus.exe" `
+            -CodexCliVersion "0.128.0"
+          if ($LASTEXITCODE -ne 0) { throw "Installed-manager provider import E2E failed: $LASTEXITCODE" }
+
           Get-Process codex-plus-plus-manager -ErrorAction SilentlyContinue | Stop-Process -Force
           $uninstaller = "$env:LOCALAPPDATA\Programs\Codex++\uninstall.exe"
           $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru

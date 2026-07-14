@@ -6,6 +6,8 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderImportRequest {
+    #[serde(default)]
+    pub import_id: String,
     pub name: String,
     pub base_url: String,
     pub api_key: String,
@@ -141,14 +143,25 @@ pub fn import_provider_with_store(
 ) -> anyhow::Result<ProviderImportResult> {
     let request = normalize_request(request)?;
     let mut settings = store.load().unwrap_or_default();
+    let stable_id = stable_profile_id(&request.import_id);
     let identity = provider_identity(&request.name, &request.base_url);
-    if let Some(existing) = settings
+    if let Some(index) = settings
         .relay_profiles
         .iter()
-        .find(|profile| provider_identity(&profile.name, &profile.upstream_base_url) == identity)
+        .position(|profile| {
+            stable_id
+                .as_ref()
+                .map(|id| profile.id == *id)
+                .unwrap_or_else(|| {
+                    provider_identity(&profile.name, &profile.upstream_base_url) == identity
+                })
+        })
     {
-        let profile_id = existing.id.clone();
-        let profile_name = existing.name.clone();
+        let profile_id = settings.relay_profiles[index].id.clone();
+        let mut replacement = relay_profile_from_request(&request, &[]);
+        replacement.id = profile_id.clone();
+        let profile_name = replacement.name.clone();
+        settings.relay_profiles[index] = replacement;
         settings.active_relay_id = profile_id.clone();
         store.save(&settings)?;
         return Ok(ProviderImportResult {
@@ -196,6 +209,7 @@ pub fn request_from_url(url: &str) -> anyhow::Result<ProviderImportRequest> {
         .transpose()?
         .unwrap_or_default();
     Ok(ProviderImportRequest {
+        import_id: values.get("importId").cloned().unwrap_or_default(),
         name: required_value(&values, "name")?,
         base_url: required_value(&values, "baseUrl")?,
         api_key: required_value(&values, "apiKey")?,
@@ -217,10 +231,9 @@ fn relay_profile_from_request(
     existing_ids: &[String],
 ) -> RelayProfile {
     RelayProfile {
-        id: unique_profile_id(
-            &format!("import-{}", sanitize_id(&request.name)),
-            existing_ids,
-        ),
+        id: stable_profile_id(&request.import_id).unwrap_or_else(|| {
+            unique_profile_id(&format!("import-{}", sanitize_id(&request.name)), existing_ids)
+        }),
         name: request.name.clone(),
         model: String::new(),
         base_url: request.base_url.clone(),
@@ -361,6 +374,19 @@ fn provider_identity(name: &str, base_url: &str) -> String {
     )
 }
 
+fn stable_profile_id(import_id: &str) -> Option<String> {
+    let import_id = import_id.trim();
+    if import_id.is_empty() {
+        return None;
+    }
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in import_id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    Some(format!("import-{}-{hash:016x}", sanitize_id(import_id)))
+}
+
 fn sanitize_id(value: &str) -> String {
     let mut result = String::new();
     for ch in value.chars() {
@@ -410,10 +436,11 @@ mod tests {
 
     #[test]
     fn parses_codexplusplus_provider_url() {
-        let url = "codexplusplus://v1/import/provider?resource=provider&name=JOJO%20Code&baseUrl=https%3A%2F%2Fjojocode.com%2Fv1&apiKey=sk-test&wireApi=responses&relayMode=pureApi&configContents=bW9kZWxfcHJvdmlkZXIgPSAiQ29kZXhQbHVzUGx1cyIK&authContents=eyJPUEVOQUlfQVBJX0tFWSI6InNrLXRlc3QifQo%3D";
+        let url = "codexplusplus://v1/import/provider?resource=provider&importId=xingnuo%3Agroup-a&name=JOJO%20Code&baseUrl=https%3A%2F%2Fjojocode.com%2Fv1&apiKey=sk-test&wireApi=responses&relayMode=pureApi&configContents=bW9kZWxfcHJvdmlkZXIgPSAiQ29kZXhQbHVzUGx1cyIK&authContents=eyJPUEVOQUlfQVBJX0tFWSI6InNrLXRlc3QifQo%3D";
 
         let request = request_from_url(url).unwrap();
 
+        assert_eq!(request.import_id, "xingnuo:group-a");
         assert_eq!(request.name, "JOJO Code");
         assert_eq!(request.base_url, "https://jojocode.com/v1");
         assert_eq!(request.api_key, "sk-test");
@@ -428,6 +455,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = SettingsStore::new(dir.path().join("settings.json"));
         let request = ProviderImportRequest {
+            import_id: String::new(),
             name: "JOJO Code".to_string(),
             base_url: "https://jojocode.com/v1/".to_string(),
             api_key: "sk-test".to_string(),
@@ -462,11 +490,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = SettingsStore::new(dir.path().join("settings.json"));
         let request = ProviderImportRequest {
+            import_id: String::new(),
             name: "Imported".to_string(),
             base_url: "https://example.invalid/v1".to_string(),
-            api_key: "sk-placeholder".to_string(),
-            wire_api: "responses".to_string(),
-            relay_mode: "pureApi".to_string(),
+            api_key: "sk-old-chat".to_string(),
+            wire_api: "chat".to_string(),
+            relay_mode: "mixedApi".to_string(),
             config_contents: String::new(),
             auth_contents: String::new(),
         };
@@ -475,11 +504,123 @@ mod tests {
         settings.active_relay_id = "official".to_string();
         store.save(&settings).unwrap();
 
-        let second = import_provider_with_store(request, store.clone()).unwrap();
+        let second = import_provider_with_store(
+            ProviderImportRequest {
+                import_id: String::new(),
+                api_key: "sk-replaced".to_string(),
+                wire_api: "responses".to_string(),
+                relay_mode: "pureApi".to_string(),
+                ..request
+            },
+            store.clone(),
+        )
+        .unwrap();
 
         assert!(!second.imported);
         assert_eq!(second.profile_id, first.profile_id);
-        assert_eq!(store.load().unwrap().active_relay_id, first.profile_id);
+        let settings = store.load().unwrap();
+        let replaced = settings.active_relay_profile();
+        assert_eq!(settings.active_relay_id, first.profile_id);
+        assert_eq!(replaced.api_key, "sk-replaced");
+        assert_eq!(replaced.protocol, RelayProtocol::Responses);
+        assert_eq!(replaced.relay_mode, RelayMode::PureApi);
+        assert!(replaced.auth_contents.contains("sk-replaced"));
+        assert!(replaced.config_contents.contains("wire_api = \"responses\""));
+        assert!(!replaced.config_contents.contains("sk-old-chat"));
+    }
+
+    #[test]
+    fn stable_import_ids_allow_same_display_name_as_distinct_providers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SettingsStore::new(dir.path().join("settings.json"));
+        for import_id in ["group-a", "group-b"] {
+            import_provider_with_store(
+                ProviderImportRequest {
+                    import_id: import_id.to_string(),
+                    name: "Same Name".to_string(),
+                    base_url: "https://example.invalid/v1".to_string(),
+                    api_key: format!("sk-{import_id}"),
+                    wire_api: "responses".to_string(),
+                    relay_mode: "pureApi".to_string(),
+                    config_contents: String::new(),
+                    auth_contents: String::new(),
+                },
+                store.clone(),
+            )
+            .unwrap();
+        }
+        let settings = store.load().unwrap();
+        let imported = settings
+            .relay_profiles
+            .iter()
+            .filter(|profile| profile.name == "Same Name")
+            .collect::<Vec<_>>();
+        assert_eq!(imported.len(), 2);
+        assert_ne!(imported[0].id, imported[1].id);
+    }
+
+    #[test]
+    fn same_stable_import_id_updates_name_key_and_protocol_but_keeps_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SettingsStore::new(dir.path().join("settings.json"));
+        let first = import_provider_with_store(
+            ProviderImportRequest {
+                import_id: "account-42".to_string(),
+                name: "Old Name".to_string(),
+                base_url: "https://old.invalid/v1".to_string(),
+                api_key: "sk-old".to_string(),
+                wire_api: "chat".to_string(),
+                relay_mode: "mixedApi".to_string(),
+                config_contents: String::new(),
+                auth_contents: String::new(),
+            },
+            store.clone(),
+        )
+        .unwrap();
+        let second = import_provider_with_store(
+            ProviderImportRequest {
+                import_id: "account-42".to_string(),
+                name: "New Name".to_string(),
+                base_url: "https://new.invalid/v1".to_string(),
+                api_key: "sk-new".to_string(),
+                wire_api: "responses".to_string(),
+                relay_mode: "pureApi".to_string(),
+                config_contents: String::new(),
+                auth_contents: String::new(),
+            },
+            store.clone(),
+        )
+        .unwrap();
+        let profile = store.load().unwrap().active_relay_profile();
+        assert!(!second.imported);
+        assert_eq!(second.profile_id, first.profile_id);
+        assert_eq!(profile.name, "New Name");
+        assert_eq!(profile.upstream_base_url, "https://new.invalid/v1");
+        assert_eq!(profile.api_key, "sk-new");
+        assert_eq!(profile.protocol, RelayProtocol::Responses);
+        assert_eq!(profile.relay_mode, RelayMode::PureApi);
+        assert!(!profile.auth_contents.contains("sk-old"));
+    }
+
+    #[test]
+    fn legacy_import_without_id_still_matches_name_and_base_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SettingsStore::new(dir.path().join("settings.json"));
+        let make = |key: &str| ProviderImportRequest {
+            import_id: String::new(),
+            name: "Legacy".to_string(),
+            base_url: "https://legacy.invalid/v1".to_string(),
+            api_key: key.to_string(),
+            wire_api: "responses".to_string(),
+            relay_mode: "pureApi".to_string(),
+            config_contents: String::new(),
+            auth_contents: String::new(),
+        };
+        let first = import_provider_with_store(make("sk-one"), store.clone()).unwrap();
+        let second = import_provider_with_store(make("sk-two"), store.clone()).unwrap();
+        assert!(!second.imported);
+        assert_eq!(second.profile_id, first.profile_id);
+        assert_eq!(store.load().unwrap().active_relay_profile().api_key, "sk-two");
     }
 
     #[test]
@@ -491,6 +632,7 @@ mod tests {
         save_pending_provider_import_at(
             &pending,
             &ProviderImportRequest {
+                import_id: String::new(),
                 name: "Imported 测试".to_string(),
                 base_url: "http://127.0.0.1:43123/v1".to_string(),
                 api_key: "sk-placeholder+%&".to_string(),
@@ -522,6 +664,7 @@ mod tests {
         save_pending_provider_import_at(
             &pending,
             &ProviderImportRequest {
+                import_id: String::new(),
                 name: "Chat Imported".to_string(),
                 base_url: "http://127.0.0.1:43124/v1".to_string(),
                 api_key: "sk-placeholder".to_string(),
@@ -539,7 +682,7 @@ mod tests {
         let profile = settings.active_relay_profile();
         let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
         assert_eq!(profile.upstream_base_url, "http://127.0.0.1:43124/v1");
-        assert!(config.contains("base_url = \"http://127.0.0.1:47891/v1\""));
+        assert!(config.contains("base_url = \"http://127.0.0.1:57321/v1\""));
         assert!(config.contains("wire_api = \"responses\""));
     }
 
@@ -548,6 +691,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pending-provider-import.json");
         let request = ProviderImportRequest {
+            import_id: String::new(),
             name: "JOJO Code".to_string(),
             base_url: "https://jojocode.com/v1".to_string(),
             api_key: "sk-test".to_string(),
@@ -574,6 +718,7 @@ mod tests {
         save_pending_provider_import_at(
             &pending_path,
             &ProviderImportRequest {
+                import_id: String::new(),
                 name: "JOJO Code".to_string(),
                 base_url: "https://jojocode.com/v1".to_string(),
                 api_key: "sk-test".to_string(),
