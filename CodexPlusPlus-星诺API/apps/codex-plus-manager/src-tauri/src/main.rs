@@ -3,25 +3,8 @@
 fn main() {
     for arg in std::env::args() {
         if arg.starts_with("codexplusplus://") {
-            match codex_plus_core::provider_import::save_pending_provider_import_from_url(&arg) {
-                Ok(request) => {
-                    let _ = codex_plus_core::diagnostic_log::append_diagnostic_log(
-                        "manager.provider_import_url.pending",
-                        serde_json::json!({
-                            "name": request.name,
-                            "baseUrl": request.base_url
-                        }),
-                    );
-                    focus_existing_manager_window();
-                }
-                Err(error) => {
-                    let _ = codex_plus_core::diagnostic_log::append_diagnostic_log(
-                        "manager.provider_import_url.failed",
-                        serde_json::json!({
-                            "error": error.to_string()
-                        }),
-                    );
-                }
+            if codex_plus_manager_lib::queue_provider_import_url(&arg) {
+                focus_existing_manager_window();
             }
         }
     }

@@ -36,7 +36,7 @@ pub fn build_app_bundle(options: &InstallOptions, manager: bool) -> MacosAppBund
     let identifier_suffix = if manager { ".manager" } else { "" };
     MacosAppBundle {
         app_path: install_root.join(format!("{display_name}.app")),
-        info_plist: info_plist(display_name, executable_name, identifier_suffix),
+        info_plist: info_plist(display_name, executable_name, identifier_suffix, manager),
         launch_script: launch_script(binary),
         binary_source: Some(binary_source),
         binary_target_name: Some(binary.to_string()),
@@ -156,8 +156,31 @@ fn executable_name_from_plist(plist: &str) -> String {
         .to_string()
 }
 
-fn info_plist(display_name: &str, executable_name: &str, identifier_suffix: &str) -> String {
+fn info_plist(
+    display_name: &str,
+    executable_name: &str,
+    identifier_suffix: &str,
+    register_provider_import: bool,
+) -> String {
     let version = crate::version::VERSION;
+    let url_types = if register_provider_import {
+        r#"  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>com.bigpizzav3.codexplusplus.provider-import</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>codexplusplus</string>
+      </array>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+    </dict>
+  </array>
+"#
+    } else {
+        ""
+    };
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -183,6 +206,7 @@ fn info_plist(display_name: &str, executable_name: &str, identifier_suffix: &str
   <true/>
   <key>LSMinimumSystemVersion</key>
   <string>12.0</string>
+{url_types}
 </dict>
 </plist>"#
     )

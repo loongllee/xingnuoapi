@@ -40,7 +40,9 @@ create_app() {
   local binary_path="$3"
   local bundle_id="$4"
   local lsui_element="${5:-false}"
+  local url_scheme="${6:-}"
   local app_dir="$STAGE/$app_name.app"
+  local url_types=""
 
   if [ ! -x "$binary_path" ]; then
     echo "error: binary not found or not executable: $binary_path" >&2
@@ -53,6 +55,24 @@ create_app() {
   cp "$ICON_ICNS" "$app_dir/Contents/Resources/$ICON_NAME"
   chmod +x "$app_dir/Contents/MacOS/$executable_name"
   printf 'APPL????' > "$app_dir/Contents/PkgInfo"
+  if [ -n "$url_scheme" ]; then
+    url_types=$(cat <<PLIST
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>com.bigpizzav3.codexplusplus.provider-import</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>$url_scheme</string>
+      </array>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+    </dict>
+  </array>
+PLIST
+)
+  fi
   cat > "$app_dir/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -84,6 +104,7 @@ create_app() {
   <true/>
   <key>LSUIElement</key>
   <$lsui_element/>
+$url_types
 </dict>
 </plist>
 PLIST
@@ -119,7 +140,7 @@ verify_app() {
 
 prepare_icon
 create_app "Codex++" "CodexPlusPlus" "$BINARY_DIR/codex-plus-plus" "com.bigpizzav3.codexplusplus" "true"
-create_app "Codex++ 管理工具" "CodexPlusPlusManager" "$BINARY_DIR/codex-plus-plus-manager" "com.bigpizzav3.codexplusplus.manager" "false"
+create_app "Codex++ 管理工具" "CodexPlusPlusManager" "$BINARY_DIR/codex-plus-plus-manager" "com.bigpizzav3.codexplusplus.manager" "false" "codexplusplus"
 
 sign_app "$STAGE/Codex++.app"
 sign_app "$STAGE/Codex++ 管理工具.app"

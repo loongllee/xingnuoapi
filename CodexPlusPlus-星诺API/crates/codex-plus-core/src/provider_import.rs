@@ -6,6 +6,8 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderImportRequest {
+    #[serde(default)]
+    pub import_id: String,
     pub name: String,
     pub base_url: String,
     pub api_key: String,
@@ -104,6 +106,33 @@ pub fn confirm_pending_provider_import_at(
     Ok(result)
 }
 
+pub fn confirm_pending_provider_import_at_and_apply(
+    path: &Path,
+    store: SettingsStore,
+    codex_home: &Path,
+) -> anyhow::Result<ProviderImportResult> {
+    let request = load_pending_provider_import_at(path)?.context("没有待确认的供应商导入")?;
+    let result = import_provider_with_store(request, store.clone())?;
+    let settings = store.load()?;
+    if !settings.relay_profiles_enabled {
+        anyhow::bail!("供应商配置总开关已关闭，导入已保存但尚未应用");
+    }
+    let profile = settings.active_relay_profile();
+    let common = crate::relay_config::normalize_config_text(&format!(
+        "{}\n\n{}\n",
+        settings.relay_common_config_contents.trim(),
+        settings.relay_context_config_contents.trim()
+    ));
+    crate::relay_config::apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard(
+        codex_home,
+        &profile,
+        &common,
+        settings.computer_use_guard_enabled,
+    )?;
+    clear_pending_provider_import_at(path)?;
+    Ok(result)
+}
+
 pub fn import_provider(request: ProviderImportRequest) -> anyhow::Result<ProviderImportResult> {
     import_provider_with_store(request, SettingsStore::default())
 }
@@ -114,16 +143,27 @@ pub fn import_provider_with_store(
 ) -> anyhow::Result<ProviderImportResult> {
     let request = normalize_request(request)?;
     let mut settings = store.load().unwrap_or_default();
+    let stable_id = stable_profile_id(&request.import_id);
     let identity = provider_identity(&request.name, &request.base_url);
-    if let Some(existing) = settings
-        .relay_profiles
-        .iter()
-        .find(|profile| provider_identity(&profile.name, &profile.upstream_base_url) == identity)
-    {
+    if let Some(index) = settings.relay_profiles.iter().position(|profile| {
+        stable_id
+            .as_ref()
+            .map(|id| profile.id == *id)
+            .unwrap_or_else(|| {
+                provider_identity(&profile.name, &profile.upstream_base_url) == identity
+            })
+    }) {
+        let profile_id = settings.relay_profiles[index].id.clone();
+        let mut replacement = relay_profile_from_request(&request, &[]);
+        replacement.id = profile_id.clone();
+        let profile_name = replacement.name.clone();
+        settings.relay_profiles[index] = replacement;
+        settings.active_relay_id = profile_id.clone();
+        store.save(&settings)?;
         return Ok(ProviderImportResult {
             imported: false,
-            profile_id: existing.id.clone(),
-            profile_name: existing.name.clone(),
+            profile_id,
+            profile_name,
         });
     }
 
@@ -165,6 +205,7 @@ pub fn request_from_url(url: &str) -> anyhow::Result<ProviderImportRequest> {
         .transpose()?
         .unwrap_or_default();
     Ok(ProviderImportRequest {
+        import_id: values.get("importId").cloned().unwrap_or_default(),
         name: required_value(&values, "name")?,
         base_url: required_value(&values, "baseUrl")?,
         api_key: required_value(&values, "apiKey")?,
@@ -186,10 +227,12 @@ fn relay_profile_from_request(
     existing_ids: &[String],
 ) -> RelayProfile {
     RelayProfile {
-        id: unique_profile_id(
-            &format!("import-{}", sanitize_id(&request.name)),
-            existing_ids,
-        ),
+        id: stable_profile_id(&request.import_id).unwrap_or_else(|| {
+            unique_profile_id(
+                &format!("import-{}", sanitize_id(&request.name)),
+                existing_ids,
+            )
+        }),
         name: request.name.clone(),
         model: String::new(),
         base_url: request.base_url.clone(),
@@ -330,6 +373,19 @@ fn provider_identity(name: &str, base_url: &str) -> String {
     )
 }
 
+fn stable_profile_id(import_id: &str) -> Option<String> {
+    let import_id = import_id.trim();
+    if import_id.is_empty() {
+        return None;
+    }
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in import_id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    Some(format!("import-{}-{hash:016x}", sanitize_id(import_id)))
+}
+
 fn sanitize_id(value: &str) -> String {
     let mut result = String::new();
     for ch in value.chars() {
@@ -379,10 +435,11 @@ mod tests {
 
     #[test]
     fn parses_codexplusplus_provider_url() {
-        let url = "codexplusplus://v1/import/provider?resource=provider&name=JOJO%20Code&baseUrl=https%3A%2F%2Fjojocode.com%2Fv1&apiKey=sk-test&wireApi=responses&relayMode=pureApi&configContents=bW9kZWxfcHJvdmlkZXIgPSAiQ29kZXhQbHVzUGx1cyIK&authContents=eyJPUEVOQUlfQVBJX0tFWSI6InNrLXRlc3QifQo%3D";
+        let url = "codexplusplus://v1/import/provider?resource=provider&importId=xingnuo%3Agroup-a&name=JOJO%20Code&baseUrl=https%3A%2F%2Fjojocode.com%2Fv1&apiKey=sk-test&wireApi=responses&relayMode=pureApi&configContents=bW9kZWxfcHJvdmlkZXIgPSAiQ29kZXhQbHVzUGx1cyIK&authContents=eyJPUEVOQUlfQVBJX0tFWSI6InNrLXRlc3QifQo%3D";
 
         let request = request_from_url(url).unwrap();
 
+        assert_eq!(request.import_id, "xingnuo:group-a");
         assert_eq!(request.name, "JOJO Code");
         assert_eq!(request.base_url, "https://jojocode.com/v1");
         assert_eq!(request.api_key, "sk-test");
@@ -397,6 +454,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = SettingsStore::new(dir.path().join("settings.json"));
         let request = ProviderImportRequest {
+            import_id: String::new(),
             name: "JOJO Code".to_string(),
             base_url: "https://jojocode.com/v1/".to_string(),
             api_key: "sk-test".to_string(),
@@ -427,10 +485,219 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_import_reselects_existing_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SettingsStore::new(dir.path().join("settings.json"));
+        let request = ProviderImportRequest {
+            import_id: String::new(),
+            name: "Imported".to_string(),
+            base_url: "https://example.invalid/v1".to_string(),
+            api_key: "sk-old-chat".to_string(),
+            wire_api: "chat".to_string(),
+            relay_mode: "mixedApi".to_string(),
+            config_contents: String::new(),
+            auth_contents: String::new(),
+        };
+        let first = import_provider_with_store(request.clone(), store.clone()).unwrap();
+        let mut settings = store.load().unwrap();
+        settings.active_relay_id = "official".to_string();
+        store.save(&settings).unwrap();
+
+        let second = import_provider_with_store(
+            ProviderImportRequest {
+                import_id: String::new(),
+                api_key: "sk-replaced".to_string(),
+                wire_api: "responses".to_string(),
+                relay_mode: "pureApi".to_string(),
+                ..request
+            },
+            store.clone(),
+        )
+        .unwrap();
+
+        assert!(!second.imported);
+        assert_eq!(second.profile_id, first.profile_id);
+        let settings = store.load().unwrap();
+        let replaced = settings.active_relay_profile();
+        assert_eq!(settings.active_relay_id, first.profile_id);
+        assert_eq!(replaced.api_key, "sk-replaced");
+        assert_eq!(replaced.protocol, RelayProtocol::Responses);
+        assert_eq!(replaced.relay_mode, RelayMode::PureApi);
+        assert!(replaced.auth_contents.contains("sk-replaced"));
+        assert!(
+            replaced
+                .config_contents
+                .contains("wire_api = \"responses\"")
+        );
+        assert!(!replaced.config_contents.contains("sk-old-chat"));
+    }
+
+    #[test]
+    fn stable_import_ids_allow_same_display_name_as_distinct_providers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SettingsStore::new(dir.path().join("settings.json"));
+        for import_id in ["group-a", "group-b"] {
+            import_provider_with_store(
+                ProviderImportRequest {
+                    import_id: import_id.to_string(),
+                    name: "Same Name".to_string(),
+                    base_url: "https://example.invalid/v1".to_string(),
+                    api_key: format!("sk-{import_id}"),
+                    wire_api: "responses".to_string(),
+                    relay_mode: "pureApi".to_string(),
+                    config_contents: String::new(),
+                    auth_contents: String::new(),
+                },
+                store.clone(),
+            )
+            .unwrap();
+        }
+        let settings = store.load().unwrap();
+        let imported = settings
+            .relay_profiles
+            .iter()
+            .filter(|profile| profile.name == "Same Name")
+            .collect::<Vec<_>>();
+        assert_eq!(imported.len(), 2);
+        assert_ne!(imported[0].id, imported[1].id);
+    }
+
+    #[test]
+    fn same_stable_import_id_updates_name_key_and_protocol_but_keeps_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SettingsStore::new(dir.path().join("settings.json"));
+        let first = import_provider_with_store(
+            ProviderImportRequest {
+                import_id: "account-42".to_string(),
+                name: "Old Name".to_string(),
+                base_url: "https://old.invalid/v1".to_string(),
+                api_key: "sk-old".to_string(),
+                wire_api: "chat".to_string(),
+                relay_mode: "mixedApi".to_string(),
+                config_contents: String::new(),
+                auth_contents: String::new(),
+            },
+            store.clone(),
+        )
+        .unwrap();
+        let second = import_provider_with_store(
+            ProviderImportRequest {
+                import_id: "account-42".to_string(),
+                name: "New Name".to_string(),
+                base_url: "https://new.invalid/v1".to_string(),
+                api_key: "sk-new".to_string(),
+                wire_api: "responses".to_string(),
+                relay_mode: "pureApi".to_string(),
+                config_contents: String::new(),
+                auth_contents: String::new(),
+            },
+            store.clone(),
+        )
+        .unwrap();
+        let profile = store.load().unwrap().active_relay_profile();
+        assert!(!second.imported);
+        assert_eq!(second.profile_id, first.profile_id);
+        assert_eq!(profile.name, "New Name");
+        assert_eq!(profile.upstream_base_url, "https://new.invalid/v1");
+        assert_eq!(profile.api_key, "sk-new");
+        assert_eq!(profile.protocol, RelayProtocol::Responses);
+        assert_eq!(profile.relay_mode, RelayMode::PureApi);
+        assert!(!profile.auth_contents.contains("sk-old"));
+    }
+
+    #[test]
+    fn legacy_import_without_id_still_matches_name_and_base_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SettingsStore::new(dir.path().join("settings.json"));
+        let make = |key: &str| ProviderImportRequest {
+            import_id: String::new(),
+            name: "Legacy".to_string(),
+            base_url: "https://legacy.invalid/v1".to_string(),
+            api_key: key.to_string(),
+            wire_api: "responses".to_string(),
+            relay_mode: "pureApi".to_string(),
+            config_contents: String::new(),
+            auth_contents: String::new(),
+        };
+        let first = import_provider_with_store(make("sk-one"), store.clone()).unwrap();
+        let second = import_provider_with_store(make("sk-two"), store.clone()).unwrap();
+        assert!(!second.imported);
+        assert_eq!(second.profile_id, first.profile_id);
+        assert_eq!(
+            store.load().unwrap().active_relay_profile().api_key,
+            "sk-two"
+        );
+    }
+
+    #[test]
+    fn confirm_and_apply_writes_responses_provider_and_clears_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let pending = dir.path().join("pending.json");
+        let store = SettingsStore::new(dir.path().join("settings.json"));
+        let home = dir.path().join("codex-home");
+        save_pending_provider_import_at(
+            &pending,
+            &ProviderImportRequest {
+                import_id: String::new(),
+                name: "Imported 测试".to_string(),
+                base_url: "http://127.0.0.1:43123/v1".to_string(),
+                api_key: "sk-placeholder+%&".to_string(),
+                wire_api: "responses".to_string(),
+                relay_mode: "pureApi".to_string(),
+                config_contents: String::new(),
+                auth_contents: String::new(),
+            },
+        )
+        .unwrap();
+
+        confirm_pending_provider_import_at_and_apply(&pending, store, &home).unwrap();
+
+        let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        let auth = std::fs::read_to_string(home.join("auth.json")).unwrap();
+        assert!(config.contains("base_url = \"http://127.0.0.1:43123/v1\""));
+        assert!(config.contains("wire_api = \"responses\""));
+        assert!(!config.contains("experimental_bearer_token"));
+        assert!(auth.contains("sk-placeholder+%&"));
+        assert!(!pending.exists());
+    }
+
+    #[test]
+    fn confirm_and_apply_chat_uses_proxy_and_preserves_upstream() {
+        let dir = tempfile::tempdir().unwrap();
+        let pending = dir.path().join("pending.json");
+        let store = SettingsStore::new(dir.path().join("settings.json"));
+        let home = dir.path().join("codex-home");
+        save_pending_provider_import_at(
+            &pending,
+            &ProviderImportRequest {
+                import_id: String::new(),
+                name: "Chat Imported".to_string(),
+                base_url: "http://127.0.0.1:43124/v1".to_string(),
+                api_key: "sk-placeholder".to_string(),
+                wire_api: "chat".to_string(),
+                relay_mode: "pureApi".to_string(),
+                config_contents: String::new(),
+                auth_contents: String::new(),
+            },
+        )
+        .unwrap();
+
+        confirm_pending_provider_import_at_and_apply(&pending, store.clone(), &home).unwrap();
+
+        let settings = store.load().unwrap();
+        let profile = settings.active_relay_profile();
+        let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        assert_eq!(profile.upstream_base_url, "http://127.0.0.1:43124/v1");
+        assert!(config.contains("base_url = \"http://127.0.0.1:57321/v1\""));
+        assert!(config.contains("wire_api = \"responses\""));
+    }
+
+    #[test]
     fn pending_provider_import_round_trips_and_clears() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pending-provider-import.json");
         let request = ProviderImportRequest {
+            import_id: String::new(),
             name: "JOJO Code".to_string(),
             base_url: "https://jojocode.com/v1".to_string(),
             api_key: "sk-test".to_string(),
@@ -457,6 +724,7 @@ mod tests {
         save_pending_provider_import_at(
             &pending_path,
             &ProviderImportRequest {
+                import_id: String::new(),
                 name: "JOJO Code".to_string(),
                 base_url: "https://jojocode.com/v1".to_string(),
                 api_key: "sk-test".to_string(),

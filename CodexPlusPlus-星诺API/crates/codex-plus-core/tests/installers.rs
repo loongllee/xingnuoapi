@@ -80,6 +80,13 @@ fn macos_bundle_metadata_contains_silent_and_manager_apps() {
             .info_plist
             .contains("<string>Codex++ 管理工具</string>")
     );
+    assert!(!silent.info_plist.contains("CFBundleURLTypes"));
+    assert!(manager.info_plist.contains("CFBundleURLTypes"));
+    assert!(
+        manager
+            .info_plist
+            .contains("<string>codexplusplus</string>")
+    );
     assert_eq!(
         silent.binary_target_name.as_deref(),
         Some("codex-plus-plus")
